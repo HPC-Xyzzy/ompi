@@ -1,5 +1,7 @@
 /*
  * Copyright (c) 2017      FUJITSU LIMITED.  All rights reserved.
+ * Copyright (c) 2017      Research Organization for Information Science
+ *                         and Technology (RIST). All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
@@ -12,6 +14,8 @@
 #include "ompi/mca/coll/coll.h"
 #include "ompi/mca/coll/base/coll_base_functions.h"
 #include "ompi/communicator/communicator.h"
+
+#include "mpiext_pcollreq_c.h"
 
 #define INFO_REQ_ARGS ompi_info_t *info, ompi_request_t **request
 
