@@ -652,12 +652,14 @@ int NBC_Start(NBC_Handle *handle) {
   if ((ompi_request_t *)handle == &ompi_request_empty) {
     return OMPI_SUCCESS;
   }
+
   /* kick off first round */
+  handle->super.req_state = OMPI_REQUEST_ACTIVE;
   res = NBC_Start_round(handle);
   if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
     return res;
   }
-  handle->super.req_state = OMPI_REQUEST_ACTIVE;
+
   OPAL_THREAD_LOCK(&mca_coll_libnbc_component.lock);
   opal_list_append(&mca_coll_libnbc_component.active_requests, &(handle->super.super.super));
   OPAL_THREAD_UNLOCK(&mca_coll_libnbc_component.lock);
