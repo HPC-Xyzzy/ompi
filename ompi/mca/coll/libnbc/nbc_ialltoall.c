@@ -590,13 +590,217 @@ static inline int a2a_sched_inplace(int rank, int p, NBC_Schedule* schedule, voi
 int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount,
                                     MPI_Datatype recvtype, struct ompi_communicator_t *comm, MPI_Info info, ompi_request_t ** request,
                                     struct mca_coll_base_module_2_2_0_t *module) {
-    int res = nbc_ialltoall(sendbuf, sendcount, sendtype, recvbuf, recvcount, recvtype,
-                            comm, request, module, true);
+
+  // information derived from input parameters (used only in this function)
+  int comm_size, rank;
+  MPI_Aint sendext, recvext;
+  int recvtypesize;
+
+  // general purpose temporary stack variables (used only in this function)
+  int res, pof2, j, nrounds, count, dst, src, round, bits[comm_size];
+  char inplace;
+  size_t tmpbufsize;
+  unsigned int mask = 0xFFFFFFFF;
+  ompi_coll_libnbc_module_t *libnbc_module = (ompi_coll_libnbc_module_t*) module;
+
+  // local pointers to long-term data that will be attached to the request
+  NBC_Schedule *schedule;
+  int sendranks[comm_size];          // needed for schedule
+  int recvranks[comm_size];          // needed for schedule
+  int sendblocks[comm_size];         // needed for schedule
+  int recvblocks[comm_size];         // needed for schedule
+  MPI_Aint recvindex[comm_size];     // needed for schedule
+  MPI_Aint sendindex[comm_size];     // needed for schedule
+  MPI_Datatype sendtypes[comm_size]; // needed for schedule
+  MPI_Datatype recvtypes[comm_size]; // needed for schedule
+  void *tmpbuf = NULL;
+  MPI_Datatype *sendblocktype;  // points to part of tmpbuf
+  MPI_Datatype *recvblocktype;  // points to part of tmpbuf
+  char *interbuf;               // points to part of tmpbuf
+
+  // derive information directly from input parameters
+
+  rank = ompi_comm_rank (comm);
+  comm_size = ompi_comm_size (comm);
+
+  res = ompi_datatype_type_extent(sendtype, &sendext);
+  if (MPI_SUCCESS != res) {
+    NBC_Error("MPI Error in ompi_datatype_type_extent() (%i)", res);
+    return res;
+  }
+
+  res = ompi_datatype_type_extent(recvtype, &recvext);
+  if (MPI_SUCCESS != res) {
+    NBC_Error("MPI Error in ompi_datatype_type_extent() (%i)", res);
+    return res;
+  }
+
+  res = ompi_datatype_type_size(recvtype, &recvtypesize);
+  if (MPI_SUCCESS != res) {
+    NBC_Error("MPI Error in ompi_datatype_type_size() (%i)", res);
+    return res;
+  }
+  recvtypesize *= recvcount;
+
+  NBC_IN_PLACE(sendbuf, recvbuf, inplace);
+
+  // calculate additional information needed to create long-term data storage
+
+  // calculate number of rounds in log_2 loop
+  nrounds = 0;
+  for (pof2 = 1; pof2 < comm_size; pof2 <<= 1)
+    nrounds++;
+
+  // compute number of 1-bits for all j, 0<=j<size
+  bits[0] = 0;
+  for (j = 1; j < comm_size; ++j)
+    bits[j] = bits[j>>1]+(j&0x1);
+
+  // calculate total size of tmpbuf
+  tmpbufsize = sizeof(MPI_Datatype)*nrounds*2 + comm_size*recvtypesize;
+
+  // create long-term data storage objects
+  // * tmpbuf contains datatype handles and intermediate data buffer
+
+  tmpbuf = (char *)malloc(tmpbufsize);
+  if (OPAL_UNLIKELY(NULL == tmpbuf)) {
+    return OMPI_ERR_OUT_OF_RESOURCE;
+  }
+  sendblocktype = (MPI_Datatype*)tmpbuf;
+  recvblocktype = (MPI_Datatype*)((char*)tmpbuf + sizeof(MPI_Datatype)*nrounds);
+  interbuf      = (void*)((char*)tmpbuf + sizeof(MPI_Datatype)*nrounds*2);
+
+  // calculate data for long-term data storage in tmpbuf
+
+  // calculate data for each round of the log_2 loop
+  for (pof2 = 1, round = 0; pof2 < comm_size; pof2 <<= 1, ++round) {
+    count = 0;
+    j = pof2;
+
+    do {
+      // bit Set
+      dst = (rank - j + comm_size) % comm_size;
+      src = (rank + j) % comm_size;
+
+      if ((bits[j&mask]&0x1) == 0x1) {
+        // to recvbuf
+        recvblocks[count] = recvcount;
+        recvindex[count] = (MPI_Aint)((char *)recvbuf + src*recvcount*recvext);
+        recvtypes[count] = recvtype;
+
+        if ((j&mask) == j) {
+          // from sendbuf
+          sendblocks[count] = sendcount;
+          sendindex[count] = (MPI_Aint)((char *)sendbuf + dst*sendcount*sendext);
+          sendtypes[count] = sendtype;
+        } else {
+          // from inter
+          sendblocks[count] = recvtypesize;
+          sendindex[count] = (MPI_Aint)(request->interbuf + j*recvtypesize);
+
+          sendtypes[count] = MPI_BYTE;
+        }
+      } else {
+        // to inter
+        recvblocks[count] = recvtypesize;
+        recvindex[count] = (MPI_Aint)(request->interbuf + j*recvtypesize);
+        recvtypes[count] = MPI_BYTE;
+
+        if ((j&mask) == j) {
+          // from sendbuf
+          sendblocks[count] = sendcount;
+          sendindex[count] =
+                  (MPI_Aint)((char *)sendbuf + dst*sendcount*sendext);
+          sendtypes[count] = sendtype;
+        } else {
+          // from recv
+          sendblocks[count] = recvcount;
+          sendindex[count] =
+                  (MPI_Aint)((char *)recvbuf + src*recvcount*recvext);
+          sendtypes[count] = recvtype;
+        }
+      }
+      count++;
+      j++;
+
+      if ((j&pof2) != pof2)
+        j += pof2;
+
+    } while(j < comm_size);
+
+    MPI_Type_create_struct(count, sendblocks, sendindex, sendtypes, &sendblocktype[round]);
+    MPI_Type_commit(&sendblocktype[round]);
+
+    MPI_Type_create_struct(count, recvblocks, recvindex, recvtypes, &recvblocktype[round]);
+    MPI_Type_commit(&recvblocktype[round]);
+
+    sendrank[round] = (rank - pof2 + comm_size) % comm_size;
+    recvrank[round] = (rank + pof2) % comm_size;
+
+    mask <<= 1; // shift in zero bit
+
+  } // end of for loop to calculate data for each round of the log_2 loop
+
+  // create long-term data storage objects
+  // * schedule contains all scheduled steps for this operation
+
+  schedule = OBJ_NEW(NBC_Schedule);
+  if (OPAL_UNLIKELY(NULL == schedule)) {
+    free(tmpbuf);
+    return OMPI_ERR_OUT_OF_RESOURCE;
+  }
+
+  // Modified first step
+  if(!inplace) {
+    // MPI_Sendrecv((char *)sendbuf + rank*sendcount*sndext, sendcount, sendtype, rank, BRUCK,
+    //              (char *)recvbuf + rank*recvcount*rcvext, recvcount, recvtype, rank, BRUCK,
+    //              comm, MPI_STATUS_IGNORE);
+    res = NBC_Sched_copy ((char *) sendbuf + rank * sendcount * sndext, false, sendcount, sendtype,
+                          (char *) recvbuf + rank * recvcount * rcvext, false, recvcount, recvtype,
+                          schedule, false);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
-        return res;
+      OBJ_RELEASE(schedule);
+      free(tmpbuf);
+      return res;
+    }
+  }
+
+  // Modified second step
+  for (round = 0; round < request->nrounds; ++round) {
+    // MPI_Sendrecv(MPI_BOTTOM, 1, sendblocktype[round], sendrank[round], BRUCK,
+    //             MPI_BOTTOM, 1, recvblocktype[round], recvrank[round], BRUCK,
+    //             comm, MPI_STATUS_IGNORE);
+
+    res = NBC_Sched_recv (MPI_BOTTOM, false, 1, recvblocktype[round], recvrank[round], schedule, false);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
+      OBJ_RELEASE(schedule);
+      free(tmpbuf);
+      return res;
     }
 
-    return OMPI_SUCCESS;
+    res = NBC_Sched_send (MPI_BOTTOM, false, 1, sendblocktype[round], sendrank[round], schedule, false);
+    if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
+      OBJ_RELEASE(schedule);
+      free(tmpbuf);
+      return res;
+    }
+  }
+
+  res = NBC_Sched_commit(schedule);
+  if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
+    OBJ_RELEASE(schedule);
+    free(tmpbuf);
+    return res;
+  }
+
+  res = NBC_Schedule_request(schedule, comm, libnbc_module, persistent, request, tmpbuf);
+  if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
+    OBJ_RELEASE(schedule);
+    free(tmpbuf);
+    return res;
+  }
+
+  return OMPI_SUCCESS;
 }
 
 int ompi_coll_libnbc_alltoall_inter_init (const void* sendbuf, int sendcount, MPI_Datatype sendtype, void* recvbuf, int recvcount,
