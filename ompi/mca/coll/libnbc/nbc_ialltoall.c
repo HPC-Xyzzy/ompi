@@ -594,10 +594,11 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
   // information derived from input parameters (used only in this function)
   int comm_size, rank;
   MPI_Aint sendext, recvext;
-  int recvtypesize;
+  size_t recvtypesize;
 
   // general purpose temporary stack variables (used only in this function)
-  int res, pof2, j, nrounds, count, dst, src, round, bits[comm_size];
+  int res, pof2, nrounds, count, dst, src, round, bits[comm_size];
+  unsigned int j;
   char inplace;
   size_t tmpbufsize;
   unsigned int mask = 0xFFFFFFFF;
@@ -696,14 +697,14 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
         } else {
           // from inter
           sendblocks[count] = recvtypesize;
-          sendindex[count] = (MPI_Aint)(request->interbuf + j*recvtypesize);
+          sendindex[count] = (MPI_Aint)(interbuf + j*recvtypesize);
 
           sendtypes[count] = MPI_BYTE;
         }
       } else {
         // to inter
         recvblocks[count] = recvtypesize;
-        recvindex[count] = (MPI_Aint)(request->interbuf + j*recvtypesize);
+        recvindex[count] = (MPI_Aint)(interbuf + j*recvtypesize);
         recvtypes[count] = MPI_BYTE;
 
         if ((j&mask) == j) {
@@ -734,8 +735,8 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
     MPI_Type_create_struct(count, recvblocks, recvindex, recvtypes, &recvblocktype[round]);
     MPI_Type_commit(&recvblocktype[round]);
 
-    sendrank[round] = (rank - pof2 + comm_size) % comm_size;
-    recvrank[round] = (rank + pof2) % comm_size;
+    sendranks[round] = (rank - pof2 + comm_size) % comm_size;
+    recvranks[round] = (rank + pof2) % comm_size;
 
     mask <<= 1; // shift in zero bit
 
@@ -755,8 +756,8 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
     // MPI_Sendrecv((char *)sendbuf + rank*sendcount*sndext, sendcount, sendtype, rank, BRUCK,
     //              (char *)recvbuf + rank*recvcount*rcvext, recvcount, recvtype, rank, BRUCK,
     //              comm, MPI_STATUS_IGNORE);
-    res = NBC_Sched_copy ((char *) sendbuf + rank * sendcount * sndext, false, sendcount, sendtype,
-                          (char *) recvbuf + rank * recvcount * rcvext, false, recvcount, recvtype,
+    res = NBC_Sched_copy ((char *) sendbuf + rank * sendcount * sendext, false, sendcount, sendtype,
+                          (char *) recvbuf + rank * recvcount * recvext, false, recvcount, recvtype,
                           schedule, false);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
       OBJ_RELEASE(schedule);
@@ -766,19 +767,19 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
   }
 
   // Modified second step
-  for (round = 0; round < request->nrounds; ++round) {
+  for (round = 0; round < nrounds; ++round) {
     // MPI_Sendrecv(MPI_BOTTOM, 1, sendblocktype[round], sendrank[round], BRUCK,
     //             MPI_BOTTOM, 1, recvblocktype[round], recvrank[round], BRUCK,
     //             comm, MPI_STATUS_IGNORE);
 
-    res = NBC_Sched_recv (MPI_BOTTOM, false, 1, recvblocktype[round], recvrank[round], schedule, false);
+    res = NBC_Sched_recv (MPI_BOTTOM, false, 1, recvblocktype[round], recvranks[round], schedule, false);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
       OBJ_RELEASE(schedule);
       free(tmpbuf);
       return res;
     }
 
-    res = NBC_Sched_send (MPI_BOTTOM, false, 1, sendblocktype[round], sendrank[round], schedule, false);
+    res = NBC_Sched_send (MPI_BOTTOM, false, 1, sendblocktype[round], sendranks[round], schedule, false);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
       OBJ_RELEASE(schedule);
       free(tmpbuf);
@@ -793,7 +794,7 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
     return res;
   }
 
-  res = NBC_Schedule_request(schedule, comm, libnbc_module, persistent, request, tmpbuf);
+  res = NBC_Schedule_request(schedule, comm, libnbc_module, true, request, tmpbuf);
   if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
     OBJ_RELEASE(schedule);
     free(tmpbuf);
