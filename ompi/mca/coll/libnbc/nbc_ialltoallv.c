@@ -11,6 +11,8 @@
  *                         reserved.
  * Copyright (c) 2017      IBM Corporation.  All rights reserved.
  * Copyright (c) 2018      FUJITSU LIMITED.
+ * Copyright (c) 2018      EPCC, The University of Edinburgh. All rights reserved.
+ * Copyright (c) 2018      Technical University of Vienna. All rights reserved.
  * $COPYRIGHT$
  *
  * Additional copyrights may follow
