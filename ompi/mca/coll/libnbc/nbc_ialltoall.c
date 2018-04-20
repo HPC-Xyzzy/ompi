@@ -598,6 +598,9 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
   MPI_Aint sendext, recvext;
   size_t recvtypesize;
 
+  rank = ompi_comm_rank (comm);
+  comm_size = ompi_comm_size (comm);
+
   // general purpose temporary stack variables (used only in this function)
   int res, pof2, nrounds, count, dst, src, round, bits[comm_size];
   unsigned int j;
@@ -622,9 +625,6 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
   char *interbuf;               // points to part of tmpbuf
 
   // derive information directly from input parameters
-
-  rank = ompi_comm_rank (comm);
-  comm_size = ompi_comm_size (comm);
 
   res = ompi_datatype_type_extent(sendtype, &sendext);
   if (MPI_SUCCESS != res) {
