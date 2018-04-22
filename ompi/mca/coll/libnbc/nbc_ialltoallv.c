@@ -430,7 +430,7 @@ int MPIX_Type_create_vector_bounded(int bound, int block, int stride, MPI_Dataty
   return OMPI_SUCCESS;
 }
 
-const int BRUCK = -333;
+const int BRUCK = 333;
 
 int ompi_coll_libnbc_alltoallv_init(const void* sendbuf, const int *sendcounts, const int *sdispls, MPI_Datatype sendtype,
                                           void* recvbuf, const int *recvcounts, const int *rdispls, MPI_Datatype recvtype,
