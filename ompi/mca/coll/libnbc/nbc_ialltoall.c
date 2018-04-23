@@ -760,7 +760,7 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
     //              comm, MPI_STATUS_IGNORE);
     res = NBC_Sched_copy ((char *) sendbuf + rank * sendcount * sendext, false, sendcount, sendtype,
                           (char *) recvbuf + rank * recvcount * recvext, false, recvcount, recvtype,
-                          schedule, false);
+                          schedule, true);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
       OBJ_RELEASE(schedule);
       free(tmpbuf);
@@ -781,7 +781,7 @@ int ompi_coll_libnbc_alltoall_init (const void* sendbuf, int sendcount, MPI_Data
       return res;
     }
 
-    res = NBC_Sched_send (MPI_BOTTOM, false, 1, sendblocktype[round], sendranks[round], schedule, false);
+    res = NBC_Sched_send (MPI_BOTTOM, false, 1, sendblocktype[round], sendranks[round], schedule, true);
     if (OPAL_UNLIKELY(OMPI_SUCCESS != res)) {
       OBJ_RELEASE(schedule);
       free(tmpbuf);
